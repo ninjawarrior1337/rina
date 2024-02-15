@@ -17,7 +17,7 @@ class PinecilBLEController extends GetxController {
   late Timer updateStateTimer;
   late Timer reconnectTimer;
 
-  PinecilState get pinecilState => PinecilState(lastRead.value);
+  PinecilState get pinecilState => PinecilState(lastRead);
 
   @override
   void onInit() async {

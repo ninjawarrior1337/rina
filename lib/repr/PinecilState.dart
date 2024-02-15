@@ -14,8 +14,6 @@ class PinecilState {
       ..[1] = slice[1]
       ..[0] = slice[0];
     return ByteData.sublistView(uint8List).getUint32(0, Endian.little);
-
-    return slice.reversed.reduce((value, element) => value << element);
   }
 
   get liveTemperature => _valueFromParameterIndex(0);

@@ -1,7 +1,5 @@
 import 'package:dynamic_color/dynamic_color.dart';
-import 'package:flex_color_scheme/flex_color_scheme.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:get/get.dart';
 import 'package:rina/views/PinecilInfo.dart';
