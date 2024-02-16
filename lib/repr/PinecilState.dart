@@ -16,7 +16,7 @@ class PinecilState {
     return ByteData.sublistView(uint8List).getUint32(0, Endian.little);
   }
 
-  get liveTemperature => _valueFromParameterIndex(0);
+  int get liveTemperature => _valueFromParameterIndex(0);
   get liveSetPoint => _valueFromParameterIndex(1);
   get dcInputVoltage => _valueFromParameterIndex(2)*0.1;
   get handleTemperature => _valueFromParameterIndex(3);

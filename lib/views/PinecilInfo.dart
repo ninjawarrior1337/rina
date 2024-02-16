@@ -3,146 +3,127 @@ import 'dart:async';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
-import 'package:get/get.dart';
+import 'package:flutter_hooks/flutter_hooks.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:rina/repr/PinecilState.dart';
 
-class PinecilBLEController extends GetxController {
-  PinecilBLEController({required this.device});
+final bleConnectionStateProvider =
+    StreamProvider.family<BluetoothConnectionState, BluetoothDevice>(
+        (ref, device) {
+  return device.connectionState;
+});
 
-  BluetoothDevice device;
-  var discoveredServices = <BluetoothService>[];
-  var connected = false.obs;
-  var lastRead = <int>[].obs;
-  var temperatureHistory = <(int, int)>[].obs;
-  late Timer updateStateTimer;
-  late Timer reconnectTimer;
+final pinecilDataProvider =
+    StreamProvider.autoDispose.family<PinecilState, BluetoothDevice>((ref, device) async* {
+  final connState = ref.watch(bleConnectionStateProvider(device));
 
-  PinecilState get pinecilState => PinecilState(lastRead);
+  await device.connect();
+  ref.onDispose(() async {await device.disconnect();});
 
-  @override
-  void onInit() async {
-    super.onInit();
+  if (connState.value == BluetoothConnectionState.connected) {
+    final services = await device.discoverServices();
+    while (true) {
+      await Future.delayed(const Duration(milliseconds: 500));
 
-    await connect();
-
-    reconnectTimer = Timer.periodic(const Duration(seconds: 3), (timer) async {
-      if (!device.isConnected) {
-        await connect();
-      }
-    });
-
-    updateStateTimer =
-        Timer.periodic(const Duration(milliseconds: 500), (timer) async {
-      if (device.isConnected) {
-        await readState();
-      }
-    });
-  }
-
-  @override
-  void onClose() async {
-    updateStateTimer.cancel();
-    reconnectTimer.cancel();
-    await disconnect();
-  }
-
-  Future<void> connect() async {
-    if (device.isConnected) {
-      return;
-    }
-
-    var subscription = device.connectionState.listen((event) {
-      if (event == BluetoothConnectionState.disconnected) {
-        discoveredServices.clear();
-        connected.value = false;
-      }
-    });
-    device.cancelWhenDisconnected(subscription, next: true, delayed: true);
-
-    await device.connect();
-    connected.value = true;
-  }
-
-  Future<void> disconnect() async {
-    if (!device.isConnected) {
-      return;
-    }
-
-    await device.disconnect();
-  }
-
-  Future<void> readState() async {
-    if (!device.isConnected) {
-      return;
-    }
-
-    if (discoveredServices.isEmpty) {
-      discoveredServices = await device.discoverServices();
-    }
-    for (BluetoothService service in discoveredServices) {
-      for (BluetoothCharacteristic char in service.characteristics) {
-        if (char.characteristicUuid ==
-            Guid("9eae1001-9d0d-48c5-AA55-33e27f9bc533")) {
-          var state = await char.read();
-          lastRead.value = state;
+      for (BluetoothService service in services) {
+        for (BluetoothCharacteristic char in service.characteristics) {
+          if (char.characteristicUuid ==
+              Guid("9eae1001-9d0d-48c5-AA55-33e27f9bc533")) {
+            if(device.isConnected) {
+              var data = await char.read();
+              yield PinecilState(data);
+            }
+          }
         }
       }
     }
-
-    if (temperatureHistory.length > 60) {
-      temperatureHistory.removeAt(0);
-    }
-    temperatureHistory.add(
-        (pinecilState.uptime.inMilliseconds, pinecilState.liveTemperature));
   }
-}
+});
 
-class PinecilInfo extends StatelessWidget {
+class PinecilInfo extends HookConsumerWidget {
   final BluetoothDevice device;
 
   const PinecilInfo({super.key, required this.device});
 
+  Widget PinecilLineChart(List<(double, double)> data) {
+    return LineChart(LineChartData(
+        lineBarsData: [
+          LineChartBarData(
+              spots: data.map((e) => FlSpot(e.$1, e.$2)).toList(),
+              isCurved: true,
+              dotData: FlDotData(show: false)),
+        ],
+        titlesData: const FlTitlesData(
+            leftTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+            bottomTitles: AxisTitles(
+                sideTitles: SideTitles(
+                  showTitles: false,
+                )),
+            topTitles:
+            AxisTitles(sideTitles: SideTitles(showTitles: false)))));
+  }
+
   @override
-  Widget build(BuildContext context) {
-    final PinecilBLEController controller =
-        Get.put(PinecilBLEController(device: device));
+  Widget build(BuildContext context, WidgetRef ref) {
+    final connState = ref.watch(bleConnectionStateProvider(device));
+    final pinecilState = ref.watch(pinecilDataProvider(device));
+
+    final pinecilTemperatureHistory = useState(<(double, double)>[]);
+
+    useEffect(() {
+      if(pinecilState.hasValue) {
+        final newTemperature = pinecilState.value!.liveTemperature.toDouble();
+        final newUptime = pinecilState.value!.uptime.inMilliseconds.toDouble();
+
+        if(pinecilTemperatureHistory.value.length > 60) {
+          pinecilTemperatureHistory.value.removeAt(0);
+        }
+        pinecilTemperatureHistory.value = [...pinecilTemperatureHistory.value, (newUptime, newTemperature)];
+      }
+      return null;
+    }, [pinecilState]);
 
     return Scaffold(
       appBar: AppBar(
         title: Text(device.advName),
       ),
       body: Center(
-        child: Obx(() {
-          if (controller.connected.value) {
-            return Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: AspectRatio(
-                aspectRatio: 2,
-                child: LineChart(LineChartData(
-                    lineBarsData: [
-                      LineChartBarData(
-                          spots: controller.temperatureHistory
-                              .map((element) => FlSpot(element.$1.toDouble(),
-                                  element.$2.toDouble()))
-                              .toList(),
-                          isCurved: true,
-                          dotData: FlDotData(show: false)),
+        child: connState.whenOrNull(
+            data: (conn) {
+              switch (conn) {
+                case BluetoothConnectionState.disconnected:
+                  return Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      CircularProgressIndicator(),
+                      SizedBox(
+                        height: 15,
+                      ),
+                      Chip(
+                          label: Text("Trying to connect to ${device.advName}"))
                     ],
-                    titlesData: const FlTitlesData(
-                        leftTitles: AxisTitles(
-                            sideTitles: SideTitles(showTitles: false)),
-                        bottomTitles: AxisTitles(
-                            sideTitles: SideTitles(
-                          showTitles: false,
-                        )),
-                        topTitles: AxisTitles(
-                            sideTitles: SideTitles(showTitles: false))))),
-              ),
-            );
-          } else {
-            return const CircularProgressIndicator();
-          }
-        }),
+                  );
+                case BluetoothConnectionState.connected:
+                  return pinecilState.whenOrNull(
+                      data: (state) => Column(
+                            children: [
+                              AspectRatio(
+                                aspectRatio: 2,
+                                child: Padding(
+                                  padding: EdgeInsets.all(16),
+                                  child: PinecilLineChart(pinecilTemperatureHistory.value),
+                                ),
+                              ),
+                              Text(state.uptime.toString())
+                            ],
+                          ),
+                      loading: () => CircularProgressIndicator());
+                default:
+                  return CircularProgressIndicator();
+              }
+            },
+            loading: () => CircularProgressIndicator()),
       ),
     );
   }

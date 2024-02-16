@@ -1,7 +1,8 @@
 import 'package:dynamic_color/dynamic_color.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
-import 'package:get/get.dart';
+import 'package:flutter_hooks/flutter_hooks.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:rina/views/PinecilInfo.dart';
 import 'package:rina/widgets/PinecilListItem.dart';
 
@@ -9,27 +10,26 @@ void main() {
   // FlutterBluePlus.setLogLevel(LogLevel.verbose, color: true);
   runApp(DynamicColorBuilder(
       builder: (ColorScheme? lightDynamic, ColorScheme? darkDynamic) {
-    return GetMaterialApp(
+    return ProviderScope(
+        child: MaterialApp(
       home: MyApp(),
       theme: ThemeData(colorScheme: lightDynamic),
       darkTheme: ThemeData(colorScheme: darkDynamic),
       themeMode: ThemeMode.system,
-    );
+    ));
   }));
 }
 
-class BluetoothController extends GetxController {
-  var devices = <BluetoothDevice>[].obs;
-  var scanning = false.obs;
+class BleChangeNotifier extends ChangeNotifier {
+  List<BluetoothDevice> devices = [];
+  bool isScanning = false;
 
-  @override
-  Future<void> onInit() async {
-    super.onInit();
-    await beginScan();
+  Future<void> stopScan() async {
+    await FlutterBluePlus.stopScan();
   }
 
-  Future<void> beginScan() async {
-    if (scanning.isTrue) {
+  Future<void> startScan() async {
+    if (isScanning) {
       return;
     }
     var subscription = FlutterBluePlus.onScanResults.listen(
@@ -38,6 +38,7 @@ class BluetoothController extends GetxController {
           ScanResult r = results.last; // the most recently found device
           if (!devices.contains(r.device)) {
             devices.add(r.device);
+            notifyListeners();
           }
           print(
               '${r.device.remoteId}: "${r.advertisementData.advName}" found!');
@@ -62,50 +63,68 @@ class BluetoothController extends GetxController {
     //   of the specified names.
     devices.clear();
     await FlutterBluePlus.startScan(
-        withServices: [Guid("9eae1000-9d0d-48c5-AA55-33e27f9bc533")], timeout: const Duration(seconds: 3));
-    scanning.value = true;
+        withServices: [Guid("9eae1000-9d0d-48c5-AA55-33e27f9bc533")],
+        timeout: const Duration(seconds: 3));
+    isScanning = true;
+    notifyListeners();
     // wait for scanning to stop
     await FlutterBluePlus.isScanning.where((val) => val == false).first;
-    scanning.value = false;
+    isScanning = false;
+    notifyListeners();
   }
 
-  Future<void> stopScan() async {
-    await FlutterBluePlus.stopScan();
+  @override
+  void dispose() {
+    super.dispose();
+    stopScan();
   }
 }
 
-class MyApp extends StatelessWidget {
+final bleChangeNotifierProvider =
+    ChangeNotifierProvider((ref) => BleChangeNotifier());
+
+class MyApp extends HookConsumerWidget {
+  const MyApp({super.key});
+
   @override
-  Widget build(context) {
-    // Instantiate your class using Get.put() to make it available for all "child" routes there.
-    final BluetoothController ble = Get.put(BluetoothController());
+  Widget build(context, ref) {
+    final bleChangeNotifier = ref.watch(bleChangeNotifierProvider);
+
+    useEffect(() {
+      bleChangeNotifier.startScan();
+      return null;
+    }, []);
 
     return Scaffold(
-        // Use Obx(()=> to update Text() whenever count is changed.
-        appBar: AppBar(title: Text("Rina")),
+        appBar: AppBar(title: const Text("Rina")),
 
-        // Replace the 8 lines Navigator.push by a simple Get.to(). You don't need context
         body: Stack(children: [
-          Obx(
-            () => RefreshIndicator(
-                onRefresh: ble.beginScan,
-                child: ListView.builder(
-                  padding: const EdgeInsets.all(8),
-                  itemCount: ble.devices.length,
-                  itemBuilder: (_, idx) {
-                    var device = ble.devices[idx];
-                    return PinecilListTile(device: device, onTap: () async {
-                      await ble.stopScan();
-                      Get.to(() => PinecilInfo(device: device));
-                    });
-                  },
-                )),
-          )
+          RefreshIndicator(
+              onRefresh: bleChangeNotifier.startScan,
+              child: ListView.builder(
+                padding: const EdgeInsets.all(8),
+                itemCount: bleChangeNotifier.devices.length,
+                itemBuilder: (_, idx) {
+                  var device = bleChangeNotifier.devices[idx];
+                  return PinecilListTile(
+                      device: device,
+                      onTap: () async {
+                        await bleChangeNotifier.stopScan();
+                        if (!context.mounted) {
+                          return;
+                        }
+                        await Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                                builder: (ctx) => PinecilInfo(device: device)));
+                      });
+                },
+              ))
         ]),
-        floatingActionButton: Obx(() => ble.scanning.isTrue
-            ? CircularProgressIndicator()
+        floatingActionButton: bleChangeNotifier.isScanning
+            ? const CircularProgressIndicator()
             : FloatingActionButton(
-                child: Icon(Icons.refresh),
-                onPressed: () async => ble.beginScan())));
+                onPressed: bleChangeNotifier.startScan,
+                child: const Icon(Icons.refresh)));
   }
 }
